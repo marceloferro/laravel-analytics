@@ -2,12 +2,13 @@
 
 namespace Ipunkt\LaravelAnalytics\Providers;
 
+use App;
 use InvalidArgumentException;
 use Ipunkt\LaravelAnalytics\Contracts\AnalyticsProviderInterface;
 use Ipunkt\LaravelAnalytics\Data\Campaign;
 use Ipunkt\LaravelAnalytics\Data\Event;
+use Ipunkt\LaravelAnalytics\Data\Renderer\CampaignRenderer;
 use Ipunkt\LaravelAnalytics\TrackingBag;
-use App;
 
 /**
  * Class GoogleAnalytics
@@ -31,11 +32,25 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     private $trackingDomain;
 
     /**
+     * tracker name
+     *
+     * @var string
+     */
+    private $trackerName;
+
+    /**
      * display features plugin enabled or disabled
      *
      * @var bool
      */
     private $displayFeatures = false;
+
+    /**
+     * ecommerce tracking plugin enabled or disabled
+     *
+     * @var bool
+     */
+    private $ecommerceTracking = false;
 
     /**
      * anonymize users ip
@@ -87,6 +102,27 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     private $userId = null;
 
     /**
+     * a campaign for tracking
+     *
+     * @var Campaign
+     */
+    private $campaign = null;
+
+    /**
+     * should the script block be rendered?
+     *
+     * @var bool
+     */
+    private $renderScriptBlock = true;
+
+    /**
+     * Content Security Nonce
+     *
+     * @var null
+     */
+    private $cspNonce = null;
+
+    /**
      * setting options via constructor
      *
      * @param array $options
@@ -97,6 +133,7 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     {
         $this->trackingId = array_get($options, 'tracking_id');
         $this->trackingDomain = array_get($options, 'tracking_domain', 'auto');
+        $this->trackerName = array_get($options, 'tracker_name', 't0');
         $this->displayFeatures = array_get($options, 'display_features', false);
         $this->anonymizeIp = array_get($options, 'anonymize_ip', false);
         $this->autoTrack = array_get($options, 'auto_track', false);
@@ -125,7 +162,7 @@ class GoogleAnalytics implements AnalyticsProviderInterface
             $hittype = $allowedHitTypes[0];
         }
 
-        if ( ! in_array($hittype, $allowedHitTypes)) {
+        if (!in_array($hittype, $allowedHitTypes)) {
             return;
         }
 
@@ -135,7 +172,7 @@ class GoogleAnalytics implements AnalyticsProviderInterface
             $page = ($page === null) ? "window.location.protocol + '//' + window.location.hostname + window.location.pathname + window.location.search" : "'{$page}'";
             $title = ($title === null) ? "document.title" : "'{$title}'";
 
-            $trackingCode = "ga('send', {'hitType': '{$hittype}', 'page': {$page}, 'title': '{$title}'});";
+            $trackingCode = "ga('send', {'hitType': '{$hittype}', 'page': {$page}, 'title': {$title}});";
         }
 
         $this->trackingBag->add($trackingCode);
@@ -151,17 +188,122 @@ class GoogleAnalytics implements AnalyticsProviderInterface
      */
     public function trackEvent($category, $action, $label = null, $value = null)
     {
-        $command = '';
-        if ($label !== null) {
-            $command .= ", '{$label}'";
-            if ($value !== null && is_numeric($value)) {
-                $command .= ", {$value}";
-            }
-        }
-
-        $trackingCode = "ga('send', 'event', '{$category}', '{$action}'$command);";
+        $trackingCode = "gtag('event', '{$category}', {'event_category': '{$category}', 'event_action': '{$action}', 'event_label': '{$label}'});";
 
         $this->trackingBag->add($trackingCode);
+    }
+
+    /**
+     * ecommerce tracking - add transaction
+     *
+     * @param string $id
+     * @param null|string $affiliation
+     * @param null|float $revenue
+     * @param null|float $shipping
+     * @param null|float $tax
+     * @param null|string $currency
+     *
+     * @return AnalyticsProviderInterface
+     */
+    public function ecommerceAddTransaction(
+        $id,
+        $affiliation = null,
+        $revenue = null,
+        $shipping = null,
+        $tax = null,
+        $currency = null
+    )
+    {
+        // Call to enable ecommerce tracking automatically
+        $this->enableEcommerceTracking();
+
+        $parameters = ['id' => $id];
+
+        if (!is_null($affiliation)) {
+            $parameters['affiliation'] = $affiliation;
+        }
+
+        if (!is_null($revenue)) {
+            $parameters['revenue'] = $revenue;
+        }
+
+        if (!is_null($shipping)) {
+            $parameters['shipping'] = $shipping;
+        }
+
+        if (!is_null($tax)) {
+            $parameters['tax'] = $tax;
+        }
+
+        if (!is_null($currency)) {
+            $parameters['currency'] = $currency;
+        }
+
+        $jsonParameters = json_encode($parameters);
+        $trackingCode = "ga('ecommerce:addTransaction', {$jsonParameters});";
+
+        $this->trackingBag->add($trackingCode);
+
+        return $this;
+    }
+
+    /**
+     * ecommerce tracking - add item
+     *
+     * @param string $id
+     * @param string $name
+     * @param null|string $sku
+     * @param null|string $category
+     * @param null|float $price
+     * @param null|int $quantity
+     * @param null|string $currency
+     *
+     * @return AnalyticsProviderInterface
+     */
+    public function ecommerceAddItem(
+        $id,
+        $name,
+        $sku = null,
+        $category = null,
+        $price = null,
+        $quantity = null,
+        $currency = null
+    )
+    {
+        // Call to enable ecommerce tracking automatically
+        $this->enableEcommerceTracking();
+
+        $parameters = [
+            'id' => $id,
+            'name' => $name,
+        ];
+
+        if (!is_null($sku)) {
+            $parameters['sku'] = $sku;
+        }
+
+        if (!is_null($category)) {
+            $parameters['category'] = $category;
+        }
+
+        if (!is_null($price)) {
+            $parameters['price'] = $price;
+        }
+
+        if (!is_null($quantity)) {
+            $parameters['quantity'] = $quantity;
+        }
+
+        if (!is_null($currency)) {
+            $parameters['currency'] = $currency;
+        }
+
+        $jsonParameters = json_encode($parameters);
+        $trackingCode = "ga('ecommerce:addItem', {$jsonParameters});";
+
+        $this->trackingBag->add($trackingCode);
+
+        return $this;
     }
 
     /**
@@ -201,6 +343,30 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     }
 
     /**
+     * enable ecommerce tracking
+     *
+     * @return GoogleAnalytics
+     */
+    public function enableEcommerceTracking()
+    {
+        $this->ecommerceTracking = true;
+
+        return $this;
+    }
+
+    /**
+     * disable ecommerce tracking
+     *
+     * @return GoogleAnalytics
+     */
+    public function disableEcommerceTracking()
+    {
+        $this->ecommerceTracking = false;
+
+        return $this;
+    }
+
+    /**
      * enable auto tracking
      *
      * @return GoogleAnalytics
@@ -225,6 +391,30 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     }
 
     /**
+     * render script block
+     *
+     * @return $this
+     */
+    public function enableScriptBlock()
+    {
+        $this->renderScriptBlock = true;
+
+        return $this;
+    }
+
+    /**
+     * do not render script block
+     *
+     * @return $this
+     */
+    public function disableScriptBlock()
+    {
+        $this->renderScriptBlock = false;
+
+        return $this;
+    }
+
+    /**
      * returns the javascript embedding code
      *
      * @return string
@@ -237,10 +427,14 @@ class GoogleAnalytics implements AnalyticsProviderInterface
             ? ''
             : sprintf(", {'userId': '%s'}", $this->userId);
 
-        if ($this->debug || App::environment('local')) {
-            $script[] = "ga('create', '{$this->trackingId}', { 'cookieDomain': 'none' }{$trackingUserId});";
-        } else {
-            $script[] = "ga('create', '{$this->trackingId}', '{$this->trackingDomain}'{$trackingUserId});";
+//        if ($this->debug) {
+//            $script[] = "ga('create', '{$this->trackingId}', { 'cookieDomain': 'none' }, '{$this->trackerName}'{$trackingUserId});";
+//        } else {
+//            $script[] = "ga('create', '{$this->trackingId}', '{$this->trackingDomain}', '{$this->trackerName}'{$trackingUserId});";
+//        }
+
+        if ($this->ecommerceTracking) {
+            $script[] = "ga('require', 'ecommerce');";
         }
 
         if ($this->displayFeatures) {
@@ -255,14 +449,23 @@ class GoogleAnalytics implements AnalyticsProviderInterface
             $script[] = "ga('set', 'nonInteraction', true);";
         }
 
+        if ($this->campaign instanceof Campaign) {
+            $script[] = (new CampaignRenderer($this->campaign))->render();
+        }
+
         $trackingStack = $this->trackingBag->get();
         if (count($trackingStack)) {
             $script[] = implode("\n", $trackingStack);
         }
 
-        if ($this->autoTrack) {
-            $script[] = "ga('send', 'pageview');";
+//        if ($this->autoTrack) {
+//            $script[] = "ga('send', 'pageview');";
+//        }
+
+        if ($this->ecommerceTracking) {
+            $script[] = "ga('ecommerce:send');";
         }
+
         $script[] = $this->_getJavascriptTemplateBlockEnd();
 
         return implode('', $script);
@@ -290,29 +493,7 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     }
 
     /**
-     * returns start block
-     *
-     * @return string
-     */
-    protected function _getJavascriptTemplateBlockBegin()
-    {
-        $appendix = $this->debug ? '_debug' : '';
-
-        return "<script>(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)})(window,document,'script','//www.google-analytics.com/analytics{$appendix}.js','ga');";
-    }
-
-    /**
-     * returns end block
-     *
-     * @return string
-     */
-    protected function _getJavascriptTemplateBlockEnd()
-    {
-        return '</script>';
-    }
-
-    /**
-     * make the tracking measurement url unsecure
+     * make the tracking measurement url insecure
      *
      * @return $this
      */
@@ -358,7 +539,8 @@ class GoogleAnalytics implements AnalyticsProviderInterface
         Campaign $campaign,
         $clientId = null,
         array $params = []
-    ) {
+    )
+    {
         $uniqueId = ($clientId !== null) ? $clientId : uniqid('track_');
 
         if ($event->getLabel() === '') {
@@ -398,7 +580,7 @@ class GoogleAnalytics implements AnalyticsProviderInterface
         $params = array_merge($defaults['params'], $params);
         $queryParams = [];
         foreach ($params as $key => $value) {
-            if ( ! empty($value)) {
+            if (!empty($value)) {
                 $queryParams[] = sprintf('%s=%s', $key, $value);
             }
         }
@@ -423,12 +605,124 @@ class GoogleAnalytics implements AnalyticsProviderInterface
     }
 
     /**
-     * unsets a possible given user id
+     * unset a possible given user id
      *
      * @return AnalyticsProviderInterface
      */
     public function unsetUserId()
     {
         return $this->setUserId(null);
+    }
+
+    /**
+     * sets custom dimensions
+     *
+     * @param string|array $dimension
+     * @param null|string $value
+     * @return AnalyticsProviderInterface
+     */
+    public function setCustom($dimension, $value = null)
+    {
+        if ($value === null && is_array($dimension)) {
+            $params = json_encode($dimension);
+            $trackingCode = "ga('set', $params);";
+        } else {
+            $trackingCode = "ga('set', '$dimension', '$value');";
+        }
+
+        $this->trackCustom($trackingCode);
+
+        return $this;
+    }
+
+    /**
+     * sets a campaign
+     *
+     * @param Campaign $campaign
+     * @return AnalyticsProviderInterface
+     */
+    public function setCampaign(Campaign $campaign)
+    {
+        $this->campaign = $campaign;
+
+        return $this;
+    }
+
+    /**
+     * unset a possible given campaign
+     *
+     * @return AnalyticsProviderInterface
+     */
+    public function unsetCampaign()
+    {
+        $this->campaign = null;
+
+        return $this;
+    }
+
+    /**
+     * enables Content Security Polity and sets nonce
+     *
+     * @return AnalyticsProviderInterface
+     */
+    public function withCSP()
+    {
+        if ($this->cspNonce === null) {
+            $this->cspNonce = 'nonce-' . random_int(0, PHP_INT_MAX);
+        }
+
+        return $this;
+    }
+
+    /**
+     * disables Content Security Polity
+     *
+     * @return AnalyticsProviderInterface
+     */
+    public function withoutCSP()
+    {
+        $this->cspNonce = null;
+
+        return $this;
+    }
+
+    /**
+     * returns the current Content Security Policy nonce
+     *
+     * @return string|null
+     */
+    public function cspNonce()
+    {
+        return $this->cspNonce;
+    }
+
+    /**
+     * returns start block
+     *
+     * @return string
+     */
+    protected function _getJavascriptTemplateBlockBegin()
+    {
+        $appendix = $this->debug ? '_debug' : '';
+
+        $scriptTag = ($this->cspNonce === null)
+            ? '<script async src="https://www.googletagmanager.com/gtag/js?id=' . $this->trackingId . '"></script><script>'
+            : '<script nonce="' . $this->cspNonce . '">';
+
+        return ($this->renderScriptBlock)
+            ? $scriptTag . "window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments)}; gtag('js', new Date()); gtag('config', '{$this->trackingId}');"
+            : '';
+    }
+
+    /**
+     * returns end block
+     *
+     * @return string
+     */
+    protected function _getJavascriptTemplateBlockEnd()
+    {
+        return ($this->renderScriptBlock)
+            ? '</script>'
+            : '';
     }
 }
